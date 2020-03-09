@@ -1,0 +1,308 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  NetworkStackName:
+    Type: 'String'
+    Default: 'network'
+Resources:
+  S3BucketCodePipelineSource:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      AccessControl: 'Private'
+      VersioningConfiguration:
+        Status: 'Enabled'
+
+  S3BucketCodePipelineArtifact:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      AccessControl: 'Private'
+      VersioningConfiguration:
+        Status: 'Enabled'
+
+  S3BucketPolicyCodePipelineArtifact:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref S3BucketCodePipelineArtifact
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Action:
+              - 's3:GetObject'
+              - 's3:GetObjectVersion'
+            Principal:
+              AWS: !Split
+                - ','
+                - Fn::ImportValue: !Sub '${NetworkStackName}::IAMRoleArns'
+            Resource: !Sub ${S3BucketCodePipelineArtifact.Arn}/*
+
+  IAMUserCircleCI:
+    Type: 'AWS::IAM::User'
+
+  IAMPolicyCircleCI:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Action:
+              - 's3:PutObject'
+            Resource:
+              - !Sub ${S3BucketCodePipelineSource.Arn}/*
+      PolicyName: 'circleci-codepipeline'
+      Users:
+        - !Ref IAMUserCircleCI
+
+  ECRRepositoryAPI:
+    Type: 'AWS::ECR::Repository'
+
+# Build
+  IAMRoleCodeBuild:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'codebuild.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action: 's3:PutObject'
+                Resource: !Sub ${S3BucketCodePipelineArtifact.Arn}/*
+              - Effect: 'Allow'
+                Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                Resource:
+                  - !Sub ${S3BucketCodePipelineArtifact.Arn}/*
+          PolicyName: 'codebuild-s3'
+        - PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+          PolicyName: 'codebuild-cloudwatch-logs'
+        - PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:CompleteLayerUpload'
+                  - 'ecr:GetAuthorizationToken'
+                  - 'ecr:InitiateLayerUpload'
+                  - 'ecr:PutImage'
+                  - 'ecr:UploadLayerPart'
+                Resource: '*'
+          PolicyName: 'codebuild-ecr'
+        - PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'ssm:PutParameter'
+                Resource: '*'
+          PolicyName: 'codebuild-ssm'
+
+  CodeBuildProject:
+    Type: 'AWS::CodeBuild::Project'
+    Properties:
+      Artifacts:
+        Type: 'CODEPIPELINE'
+      BadgeEnabled: false
+      Description: !Sub 'created by ${AWS::StackName}'
+      ServiceRole: !GetAtt IAMRoleCodeBuild.Arn
+      Environment:
+        ComputeType: 'BUILD_GENERAL1_SMALL'
+        Image: 'aws/codebuild/docker:17.09.0'
+        EnvironmentVariables:
+          - Name: 'IMAGE_REPO_API'
+            Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepositoryAPI}
+            Type: 'PLAINTEXT'
+        PrivilegedMode: true
+        Type: 'LINUX_CONTAINER'
+      Source:
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo Logging in to Amazon ECR...
+                - $(aws ecr get-login --no-include-email --region $AWS_DEFAULT_REGION)
+            build:
+              commands:
+                - echo Build started on `date`
+                - echo Building the Docker image...
+                # api
+                - docker build -t $IMAGE_REPO_API:$(cat REVISION) -f Dockerfile .
+            post_build:
+              commands:
+                - echo Build completed on `date`
+                - echo Pushing the Docker image...
+                # api
+                - docker push $IMAGE_REPO_API:$(cat REVISION)
+                - aws ssm put-parameter --name /ecr/api/latest --value $IMAGE_REPO_API:$(cat REVISION) --type String --overwrite
+        Type: 'CODEPIPELINE'
+      TimeoutInMinutes: 30
+
+# Deploy
+  IAMRoleCodeDeploy:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'codedeploy.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole'
+
+  CodeDeployApplication:
+    Type: 'AWS::CodeDeploy::Application'
+    Properties:
+      ComputePlatform: 'Server'
+
+  CodeDeployDeploymentGroupAPI:
+    Type: 'AWS::CodeDeploy::DeploymentGroup'
+    Properties:
+      # AlarmConfiguration:
+      #   AlarmConfiguration
+      ApplicationName: !Ref CodeDeployApplication
+      # AutoRollbackConfiguration:
+      #   AutoRollbackConfiguration
+      AutoScalingGroups: !Split
+        - ','
+        - Fn::ImportValue: !Sub '${NetworkStackName}::AutoScalingGroups'
+      # Deployment:
+      #   Deployment
+      DeploymentConfigName: 'CodeDeployDefault.OneAtATime'
+      DeploymentStyle:
+        DeploymentOption: 'WITH_TRAFFIC_CONTROL'
+        DeploymentType: 'IN_PLACE'
+      LoadBalancerInfo:
+        TargetGroupInfoList:
+          - Name: !Select
+              - 0
+              - !Split
+                - ','
+                - Fn::ImportValue: !Sub '${NetworkStackName}::TargetGroups'
+      ServiceRoleArn: !GetAtt IAMRoleCodeDeploy.Arn
+      # TriggerConfigurations:
+      #   - TriggerConfig
+
+  IAMRoleCodePipeline:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'codepipeline.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action: 's3:PutObject'
+                Resource: !Sub ${S3BucketCodePipelineArtifact.Arn}/*
+              - Effect: 'Allow'
+                Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:GetBucketVersioning'
+                Resource:
+                  - !Sub ${S3BucketCodePipelineSource.Arn}
+                  - !Sub ${S3BucketCodePipelineSource.Arn}/*
+                  - !Sub ${S3BucketCodePipelineArtifact.Arn}
+                  - !Sub ${S3BucketCodePipelineArtifact.Arn}/*
+          PolicyName: 'codepipeline-s3'
+        - PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'codebuild:BatchGetBuilds'
+                  - 'codebuild:StartBuild'
+                Resource: '*'
+          PolicyName: 'codepipeline-codebuild'
+        - PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'codedeploy:CreateDeployment'
+                  - 'codedeploy:GetApplicationRevision'
+                  - 'codedeploy:GetDeployment'
+                  - 'codedeploy:GetDeploymentConfig'
+                  - 'codedeploy:RegisterApplicationRevision'
+                Resource: '*'
+          PolicyName: 'codepipeline-codedeploy'
+
+  CodePipelinePipeline:
+    Type: 'AWS::CodePipeline::Pipeline'
+    Properties:
+      ArtifactStore:
+        Location: !Ref S3BucketCodePipelineArtifact
+        Type: 'S3'
+      RestartExecutionOnUpdate: false
+      RoleArn: !GetAtt IAMRoleCodePipeline.Arn
+      Stages:
+        - Name: 'Source'
+          Actions:
+            -
+              Name: 'SourceAction'
+              ActionTypeId:
+                Category: 'Source'
+                Owner: 'AWS'
+                Provider: 'S3'
+                Version: '1'
+              OutputArtifacts:
+                -
+                  Name: 'SourceOutput'
+              Configuration:
+                S3Bucket: !Ref S3BucketCodePipelineSource
+                S3ObjectKey: 'source.zip'
+        - Name: 'Build'
+          Actions:
+            -
+              Name: 'Build'
+              ActionTypeId:
+                Category: 'Build'
+                Owner: 'AWS'
+                Provider: 'CodeBuild'
+                Version: '1'
+              InputArtifacts:
+                -
+                  Name: 'SourceOutput'
+              OutputArtifacts:
+                -
+                  Name: 'BuildDockerOutput'
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+        - Name: 'Release'
+          Actions:
+            - Name: 'Release'
+              ActionTypeId:
+                Category: 'Deploy'
+                Owner: 'AWS'
+                Provider: 'CodeDeploy'
+                Version: '1'
+              InputArtifacts:
+                - Name: 'SourceOutput'
+              Configuration:
+                ApplicationName: !Ref CodeDeployApplication
+                DeploymentGroupName: !Ref CodeDeployDeploymentGroupAPI
+              RunOrder: 1

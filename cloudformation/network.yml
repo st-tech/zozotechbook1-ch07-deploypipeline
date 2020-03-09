@@ -1,0 +1,546 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  CidrBlockIPv4VPC:
+    Type: 'String'
+    Default: '10.0.0.0/16'
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+Resources:
+  EC2VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties: 
+      CidrBlock: !Ref CidrBlockIPv4VPC
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: 'default'
+
+  EC2InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    
+  EC2VPCGatewayAttachment:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      InternetGatewayId: !Ref EC2InternetGateway
+      VpcId: !Ref EC2VPC
+
+  EC2VPCDHCPOptionsAssociation:
+    Type: 'AWS::EC2::VPCDHCPOptionsAssociation'
+    Properties:
+      DhcpOptionsId: !Ref EC2DHCPOptions
+      VpcId: !Ref EC2VPC
+
+  EC2DHCPOptions:
+    Type: 'AWS::EC2::DHCPOptions'
+    Properties:
+      DomainName: !Sub '${AWS::Region}.compute.internal'
+      DomainNameServers:
+        - 'AmazonProvidedDNS'
+
+# AZ1st
+# ==============================
+  EC2SubnetPublicAZ1st:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Select [0, !Cidr [ !Ref CidrBlockIPv4VPC, 9, 8 ]]
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref EC2VPC
+
+  EC2RouteTablePublicAZ1st:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref EC2VPC
+
+  EC2SubnetRouteTableAssociationPublicAZ1st:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref EC2RouteTablePublicAZ1st
+      SubnetId: !Ref EC2SubnetPublicAZ1st
+
+  EC2RouteIPv4PublicAZ1st:
+    DependsOn: EC2VPCGatewayAttachment
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref EC2InternetGateway
+      RouteTableId: !Ref EC2RouteTablePublicAZ1st
+
+  EC2SubnetPrivateApplicationAZ1st:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Select [3, !Cidr [ !Ref CidrBlockIPv4VPC, 9, 8 ]]
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref EC2VPC
+
+  EC2RouteTablePrivateApplicationAZ1st:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref EC2VPC
+
+  EC2SubnetRouteTableAssociationPrivateApplicationAZ1st:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref EC2RouteTablePrivateApplicationAZ1st
+      SubnetId: !Ref EC2SubnetPrivateApplicationAZ1st
+
+  EC2RouteIPv4PrivateApplicationAZ1st:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId: !Ref EC2NatGatewayAZ1st
+      RouteTableId: !Ref EC2RouteTablePrivateApplicationAZ1st
+
+  EC2EIPForNatGatewayAZ1st:
+    Type: 'AWS::EC2::EIP'
+    DependsOn: EC2VPCGatewayAttachment
+    Properties:
+      Domain: 'vpc'
+
+  EC2NatGatewayAZ1st:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt EC2EIPForNatGatewayAZ1st.AllocationId
+      SubnetId: !Ref EC2SubnetPublicAZ1st
+
+  EC2SubnetPrivateDatabaseAZ1st:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Select [6, !Cidr [ !Ref CidrBlockIPv4VPC, 9, 8 ]]
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref EC2VPC
+
+  EC2RouteTablePrivateDatabaseAZ1st:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref EC2VPC
+
+  EC2SubnetRouteTableAssociationPrivateDatabaseAZ1st:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref EC2RouteTablePrivateDatabaseAZ1st
+      SubnetId: !Ref EC2SubnetPrivateDatabaseAZ1st
+
+# AZ2nd
+# ==============================
+  EC2SubnetPublicAZ2nd:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Select [1, !Cidr [ !Ref CidrBlockIPv4VPC, 9, 8 ]]
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref EC2VPC
+
+  EC2RouteTablePublicAZ2nd:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref EC2VPC
+
+  EC2SubnetRouteTableAssociationPublicAZ2nd:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref EC2RouteTablePublicAZ2nd
+      SubnetId: !Ref EC2SubnetPublicAZ2nd
+
+  EC2RouteIPv4PublicAZ2nd:
+    DependsOn: EC2VPCGatewayAttachment
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref EC2InternetGateway
+      RouteTableId: !Ref EC2RouteTablePublicAZ2nd
+
+  EC2SubnetPrivateApplicationAZ2nd:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Select [4, !Cidr [ !Ref CidrBlockIPv4VPC, 9, 8 ]]
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref EC2VPC
+
+  EC2RouteTablePrivateApplicationAZ2nd:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref EC2VPC
+
+  EC2SubnetRouteTableAssociationPrivateApplicationAZ2nd:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref EC2RouteTablePrivateApplicationAZ2nd
+      SubnetId: !Ref EC2SubnetPrivateApplicationAZ2nd
+
+  EC2RouteIPv4PrivateApplicationAZ2nd:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId: !Ref EC2NatGatewayAZ2nd
+      RouteTableId: !Ref EC2RouteTablePrivateApplicationAZ2nd
+
+  EC2EIPForNatGatewayAZ2nd:
+    Type: 'AWS::EC2::EIP'
+    DependsOn: EC2VPCGatewayAttachment
+    Properties:
+      Domain: 'vpc'
+
+  EC2NatGatewayAZ2nd:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt EC2EIPForNatGatewayAZ2nd.AllocationId
+      SubnetId: !Ref EC2SubnetPublicAZ2nd
+
+  EC2SubnetPrivateDatabaseAZ2nd:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Select [7, !Cidr [ !Ref CidrBlockIPv4VPC, 9, 8 ]]
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref EC2VPC
+
+  EC2RouteTablePrivateDatabaseAZ2nd:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref EC2VPC
+
+  EC2SubnetRouteTableAssociationPrivateDatabaseAZ2nd:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref EC2RouteTablePrivateDatabaseAZ2nd
+      SubnetId: !Ref EC2SubnetPrivateDatabaseAZ2nd
+
+# AZ3rd
+# ==============================
+  EC2SubnetPublicAZ3rd:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [2, !GetAZs '']
+      CidrBlock: !Select [2, !Cidr [ !Ref CidrBlockIPv4VPC, 9, 8 ]]
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref EC2VPC
+
+  EC2RouteTablePublicAZ3rd:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref EC2VPC
+
+  EC2SubnetRouteTableAssociationPublicAZ3rd:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref EC2RouteTablePublicAZ3rd
+      SubnetId: !Ref EC2SubnetPublicAZ3rd
+
+  EC2RouteIPv4PublicAZ3rd:
+    DependsOn: EC2VPCGatewayAttachment
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref EC2InternetGateway
+      RouteTableId: !Ref EC2RouteTablePublicAZ3rd
+
+  EC2SubnetPrivateApplicationAZ3rd:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [2, !GetAZs '']
+      CidrBlock: !Select [5, !Cidr [ !Ref CidrBlockIPv4VPC, 9, 8 ]]
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref EC2VPC
+
+  EC2RouteTablePrivateApplicationAZ3rd:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref EC2VPC
+
+  EC2SubnetRouteTableAssociationPrivateApplicationAZ3rd:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref EC2RouteTablePrivateApplicationAZ3rd
+      SubnetId: !Ref EC2SubnetPrivateApplicationAZ3rd
+
+  EC2RouteIPv4PrivateApplicationAZ3rd:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId: !Ref EC2NatGatewayAZ3rd
+      RouteTableId: !Ref EC2RouteTablePrivateApplicationAZ3rd
+
+  EC2EIPForNatGatewayAZ3rd:
+    Type: 'AWS::EC2::EIP'
+    DependsOn: EC2VPCGatewayAttachment
+    Properties:
+      Domain: 'vpc'
+
+  EC2NatGatewayAZ3rd:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt EC2EIPForNatGatewayAZ3rd.AllocationId
+      SubnetId: !Ref EC2SubnetPublicAZ3rd
+
+  EC2SubnetPrivateDatabaseAZ3rd:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [2, !GetAZs '']
+      CidrBlock: !Select [8, !Cidr [ !Ref CidrBlockIPv4VPC, 9, 8 ]]
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref EC2VPC
+
+  EC2RouteTablePrivateDatabaseAZ3rd:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref EC2VPC
+
+  EC2SubnetRouteTableAssociationPrivateDatabaseAZ3rd:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref EC2RouteTablePrivateDatabaseAZ3rd
+      SubnetId: !Ref EC2SubnetPrivateDatabaseAZ3rd
+
+
+# ALB
+
+  ElasticLoadBalancingV2LoadBalancer:
+    DependsOn: EC2VPCGatewayAttachment
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      LoadBalancerAttributes:
+        - Key: 'deletion_protection.enabled'
+          Value: false
+        - Key: 'idle_timeout.timeout_seconds'
+          Value: 60
+      Scheme: 'internet-facing'
+      SecurityGroups:
+        - !Ref EC2SecurityGroupALB
+      Subnets:
+        - !Ref EC2SubnetPublicAZ1st
+        - !Ref EC2SubnetPublicAZ2nd
+        - !Ref EC2SubnetPublicAZ3rd
+
+
+  EC2SecurityGroupALB:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'for alb'
+      SecurityGroupIngress:
+        - CidrIp: '0.0.0.0/0'
+          FromPort: 80
+          ToPort: 80
+          IpProtocol: 'tcp'
+      VpcId: !Ref EC2VPC
+
+  ElasticLoadBalancingV2TargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      HealthCheckIntervalSeconds: 5
+      HealthCheckPath: '/'
+      HealthCheckPort: 'traffic-port'
+      HealthCheckProtocol: 'HTTP'
+      HealthCheckTimeoutSeconds: 2
+      HealthyThresholdCount: 2
+      Matcher:
+        HttpCode: 200
+      Port: 80
+      Protocol: 'HTTP'
+      TargetGroupAttributes:
+        - Key: 'deregistration_delay.timeout_seconds'
+          Value: 30
+        - Key: 'stickiness.enabled'
+          Value: false
+      UnhealthyThresholdCount: 2
+      TargetType: 'instance'
+      VpcId: !Ref EC2VPC
+
+  ElasticLoadBalancingV2ListenerHTTP:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref ElasticLoadBalancingV2TargetGroup
+          Type: 'forward'
+      LoadBalancerArn: !Ref ElasticLoadBalancingV2LoadBalancer
+      Port: 80
+      Protocol: 'HTTP'
+
+# AutoScaling
+  EC2SecurityGroupAPI:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'for api'
+      VpcId: !Ref EC2VPC
+
+  EC2SecurityGroupEgressALBToAPI:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      DestinationSecurityGroupId: !Ref EC2SecurityGroupAPI
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      GroupId: !Ref EC2SecurityGroupALB
+
+  EC2SecurityGroupIngressAPIFromALB:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      SourceSecurityGroupId: !Ref EC2SecurityGroupALB
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      GroupId: !Ref EC2SecurityGroupAPI
+
+  IAMInstanceProfileAPI:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Path: '/'
+      Roles:
+        - !Ref IAMRoleAPI
+
+  IAMRoleAPI:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: 'Allow'
+          Principal:
+            Service:
+              - 'ec2.amazonaws.com'
+          Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyDocument:
+            Statement:
+              Effect: 'Allow'
+              Action:
+                - 'ecr:GetAuthorizationToken'
+                - 'ecr:GetDownloadUrlForLayer'
+                - 'ecr:BatchGetImage'
+              Resource:
+                - '*'
+          PolicyName: 'api-ecr-pull'
+        - PolicyDocument:
+            Statement:
+              Effect: 'Allow'
+              Action:
+                - 'ssm:GetParameter'
+                - 'ssm:GetParameters'
+              Resource:
+                - '*'
+          PolicyName: 'api-ssm'
+
+  AutoScalingLaunchConfiguration:
+    Type: 'AWS::AutoScaling::LaunchConfiguration'
+    Properties:
+      AssociatePublicIpAddress: false
+      BlockDeviceMappings:
+        - DeviceName: '/dev/sda1'
+          Ebs:
+            DeleteOnTermination: true
+            VolumeSize: 100
+            VolumeType: 'gp2'
+      EbsOptimized: true
+      IamInstanceProfile: !Ref IAMInstanceProfileAPI
+      ImageId: !Ref LatestAmiId
+      InstanceMonitoring: true
+      InstanceType: 'm5.large'
+      SecurityGroups:
+        - !Ref EC2SecurityGroupAPI
+      SpotPrice: '1.0'
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #cloud-config
+            repo_update: true
+            repo_upgrade: security
+            runcmd:
+              - /opt/aws/bin/cfn-init -v --stack ${Stack} --resource AutoScalingAutoScalingGroup --region ${Region}
+              - /opt/aws/bin/cfn-signal -e $? --stack ${Stack} --resource AutoScalingAutoScalingGroup --region ${Region}
+          - Stack: !Ref AWS::StackName
+            Region: !Ref AWS::Region
+
+  AutoScalingAutoScalingGroup:
+    DependsOn: EC2VPCGatewayAttachment
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          packages:
+            yum:
+              ruby: []
+              wget: []
+          files:
+            /etc/cfn/cfn-hup.conf:
+              content: !Sub |
+                [main]
+                stack = ${AWS::StackName}
+                region = ${AWS::Region}
+                interval = 1
+              mode: '000400'
+              owner: 'root'
+              group: 'root'
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers = post.update
+                path = Resources.AutoScalingAutoScalingGroup.Metadata.AWS::CloudFormation::Init
+                action = /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource AutoScalingAutoScalingGroup --region ${AWS::Region}
+                runas = root
+              mode: '000400'
+              owner: 'root'
+              group: 'root'
+            /home/ec2-user/install:
+              source: !Sub 'https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install'
+              mode: '000755'
+          commands:
+            codedeploy-agent:
+              command: './install auto'
+              cwd: '/home/ec2-user/'
+            docker:
+              command: 'amazon-linux-extras install -y docker'
+          services:
+            sysvinit:
+              docker:
+                enabled: true
+                ensureRunning: true
+                commands:
+                  - 'docker'
+    UpdatePolicy:
+      AutoScalingReplacingUpdate:
+        WillReplace: true
+    CreationPolicy:
+      AutoScalingCreationPolicy:
+        MinSuccessfulInstancesPercent: 100
+      ResourceSignal:    
+        Count: 1
+        Timeout: 'PT10M'
+    Type: 'AWS::AutoScaling::AutoScalingGroup'
+    Properties:
+      Cooldown: 300
+      HealthCheckGracePeriod: 120
+      HealthCheckType: 'EC2'
+      LaunchConfigurationName: !Ref AutoScalingLaunchConfiguration
+      MaxSize: 1
+      MinSize: 1
+      TargetGroupARNs:
+        - !Ref ElasticLoadBalancingV2TargetGroup
+      TerminationPolicies:
+        - OldestLaunchConfiguration
+        - OldestInstance
+        - Default
+      VPCZoneIdentifier:
+        - !Ref EC2SubnetPrivateApplicationAZ1st
+        - !Ref EC2SubnetPrivateApplicationAZ2nd
+        - !Ref EC2SubnetPrivateApplicationAZ3rd
+
+Outputs:
+  IAMRoleArns:
+    Value:
+      !Join [',', [!GetAtt IAMRoleAPI.Arn]]
+    Export:
+      Name: !Sub '${AWS::StackName}::IAMRoleArns'
+  AutoScalingGroups:
+    Value:
+      !Join [',', [!Ref AutoScalingAutoScalingGroup]]
+    Export:
+      Name: !Sub '${AWS::StackName}::AutoScalingGroups'
+  TargetGroupName:
+    Value:
+      !Join [',', [!GetAtt ElasticLoadBalancingV2TargetGroup.TargetGroupName]]
+    Export:
+      Name: !Sub '${AWS::StackName}::TargetGroups'
+  
+  
